@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -618,4 +619,65 @@ func createLegacyContainer(ctx context.Context, t *testing.T, apiClient client.A
 	err = json.Unmarshal(buf, &resp)
 	assert.NilError(t, err)
 	return resp.ID
+}
+
+func TestContainerRunWithUmask(t *testing.T) {
+	skip.If(t, versions.LessThan(testEnv.DaemonAPIVersion(), "1.56"), "requires API v1.56")
+
+	ctx := setupTest(t)
+	apiClient := testEnv.APIClient()
+
+	users := []string{"", "1000", "nobody"}
+	pretty_user := func(s string) string {
+		if s == "" {
+			return "unspecified"
+		}
+		return s
+	}
+
+	tests := []struct {
+		umask    int
+		expected string
+	}{
+		{
+			umask:    -1,
+			expected: "0022", // runc defaults to 0o022 when spec.Process.User.Umask == nil
+		},
+		{
+			umask:    0000,
+			expected: "0000",
+		},
+		{
+			umask:    0777,
+			expected: "0777",
+		},
+	}
+	pretty_umask := func(u int) string {
+		if u == -1 {
+			return "unspecified"
+		}
+		return fmt.Sprintf("%04o", u)
+	}
+
+	for _, user := range users {
+		for _, tc := range tests {
+			t.Run(fmt.Sprintf("user_%s_umask_%s", pretty_user(user), pretty_umask(tc.umask)), func(t *testing.T) {
+				cID := container.Run(ctx, t, apiClient, container.WithUser(user), container.WithCmd("sh", "-c", "umask"), func(c *container.TestContainerConfig) {
+					if tc.umask != -1 {
+						umask := uint32(tc.umask)
+						c.HostConfig.Umask = &umask
+					}
+				})
+				poll.WaitOn(t, container.IsStopped(ctx, apiClient, cID))
+
+				out, err := apiClient.ContainerLogs(ctx, cID, client.ContainerLogsOptions{ShowStdout: true})
+				assert.NilError(t, err)
+				defer out.Close()
+				var b bytes.Buffer
+				_, err = stdcopy.StdCopy(&b, io.Discard, out)
+				assert.NilError(t, err)
+				assert.Equal(t, tc.expected, strings.TrimSpace(b.String()))
+			})
+		}
+	}
 }

@@ -998,8 +998,23 @@ func WithUser(c *container.Container) coci.SpecOpts {
 			s.Process = &specs.Process{}
 		}
 		var err error
-		s.Process.User, err = getUser(c, c.Config.User)
+		user, err := getUser(c, c.Config.User)
+		// specs.User returned by getUser lacks Umask field
+		// copy each fields instead of overwriting the whole struct
+		s.Process.User.UID = user.UID
+		s.Process.User.GID = user.GID
+		s.Process.User.AdditionalGids = user.AdditionalGids
 		return err
+	}
+}
+
+// WithUmask sets the container's umask.
+func WithUmask(c *container.Container) coci.SpecOpts {
+	return func(ctx context.Context, _ coci.Client, _ *containers.Container, s *coci.Spec) error {
+		if c.HostConfig.Umask == nil {
+			return nil
+		}
+		return coci.WithUmask(*c.HostConfig.Umask)(ctx, nil, nil, s)
 	}
 }
 
@@ -1015,6 +1030,7 @@ func (daemon *Daemon) createSpec(ctx context.Context, daemonCfg *configStore, c 
 		WithSysctls(c),
 		// Set the user before CDI device injection, which may append supplementary groups.
 		WithUser(c),
+		WithUmask(c),
 		WithDevices(daemon, c),
 		withRlimits(daemon, &daemonCfg.Config, c),
 		WithNamespaces(daemon, c),

@@ -1280,6 +1280,18 @@ definitions:
             x-nullable: true
             description: |-
               Runtime to use with this container.
+          Umask:
+            type: "integer"
+            format: "uint32"
+            x-nullable: true
+            description: |-
+              Set the initial umask for a Unix container.
+
+              Behavior remains implementation-defined across OCI runtimes. If
+              this field is non-nil, `runc` applies the umask to container
+              entrypoint/exec/healthcheck. If this field is nil, `runc` default
+              to 0022 for container entrypoint while exec and healthcheck
+              inherit their umask from `containerd`.
           # Applicable to Windows
           Isolation:
             type: "string"

@@ -15,6 +15,13 @@ keywords: "API, Docker, rcli, REST, documentation"
 
 ## v1.56 API changes
 
+* `POST /containers/create` now supports `HostConfig.Umask` to set the initial
+  umask for a Unix container. Behavior remains implementation-defined across
+  OCI runtimes. If this field is non-nil, `runc` applies the umask to container
+  entrypoint/exec/healthcheck. If this field is nil, `runc` default to 0022 for
+  container entrypoint while exec and healthcheck inherit their umask from
+  `containerd`.
+
 ## v1.55 API changes
 
 * `GET /images/{name}/attestations` is a new endpoint that returns the in-toto

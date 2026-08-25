@@ -1,6 +1,7 @@
 package container
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -64,5 +65,66 @@ func TestFailedExecExitCode(t *testing.T) {
 
 			assert.Equal(t, result.ExitCode, tc.expectedExitCode)
 		})
+	}
+}
+
+func TestContainerExecDefaultUmask(t *testing.T) {
+	skip.If(t, versions.LessThan(testEnv.DaemonAPIVersion(), "1.56"), "requires API v1.56")
+
+	ctx := setupTest(t)
+	apiClient := testEnv.APIClient()
+
+	users := []string{"", "1000", "nobody"}
+	pretty_user := func(s string) string {
+		if s == "" {
+			return "unspecified"
+		}
+		return s
+	}
+
+	tests := []struct {
+		umask    int
+		expected string
+	}{
+		{
+			umask:    -1,
+			expected: "0000",
+			// runc inherits from parent process when spec.Process.User.Umask == nil
+			// a managed containerd inherits umask=0 from dockerd
+		},
+		{
+			umask:    0000,
+			expected: "0000",
+		},
+		{
+			umask:    0777,
+			expected: "0777",
+		},
+	}
+	pretty_umask := func(u int) string {
+		if u == -1 {
+			return "unspecified"
+		}
+		return fmt.Sprintf("%04o", u)
+	}
+
+	for _, run_user := range users {
+		for _, exec_user := range users {
+			for _, tc := range tests {
+				t.Run(fmt.Sprintf("user_%s_%s_umask_%s", pretty_user(run_user), pretty_user(exec_user), pretty_umask(tc.umask)), func(t *testing.T) {
+					cID := container.Run(ctx, t, apiClient, container.WithUser(run_user), func(c *container.TestContainerConfig) {
+						if tc.umask != -1 {
+							umask := uint32(tc.umask)
+							c.HostConfig.Umask = &umask
+						}
+					})
+					result, err := container.Exec(ctx, apiClient, cID, []string{"sh", "-c", "umask"}, func(ec *client.ExecCreateOptions) {
+						ec.User = exec_user
+					})
+					assert.NilError(t, err)
+					assert.Equal(t, tc.expected, strings.TrimSpace(result.Stdout()))
+				})
+			}
+		}
 	}
 }

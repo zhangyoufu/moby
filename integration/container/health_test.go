@@ -8,6 +8,7 @@ import (
 
 	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
 	"github.com/moby/moby/v2/integration/internal/container"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/poll"
@@ -212,6 +213,67 @@ func pollForHealthStatus(ctx context.Context, apiClient client.APIClient, contai
 			return poll.Success()
 		default:
 			return poll.Continue("waiting for container to become %s", healthStatus)
+		}
+	}
+}
+
+func TestHealthCheckUmask(t *testing.T) {
+	skip.If(t, testEnv.DaemonInfo.OSType == "windows", "Windows does not support umask")
+	skip.If(t, versions.LessThan(testEnv.DaemonAPIVersion(), "1.56"), "requires API v1.56")
+
+	ctx := setupTest(t)
+	apiClient := testEnv.APIClient()
+
+	users := []string{"", "1000", "nobody"}
+	pretty_user := func(s string) string {
+		if s == "" {
+			return "unspecified"
+		}
+		return s
+	}
+
+	tests := []struct {
+		umask    int
+		expected string
+	}{
+		{
+			umask:    -1,
+			expected: "0000",
+			// runc inherits from parent process when spec.Process.User.Umask == nil
+			// a managed containerd inherits umask=0 from dockerd
+		},
+		{
+			umask:    0000,
+			expected: "0000",
+		},
+		{
+			umask:    0777,
+			expected: "0777",
+		},
+	}
+	pretty_umask := func(u int) string {
+		if u == -1 {
+			return "unspecified"
+		}
+		return fmt.Sprintf("%04o", u)
+	}
+
+	for _, user := range users {
+		for _, tc := range tests {
+			t.Run(fmt.Sprintf("user_%s_umask_%s", pretty_user(user), pretty_umask(tc.umask)), func(t *testing.T) {
+				cID := container.Run(ctx, t, apiClient, container.WithUser(user), func(c *container.TestContainerConfig) {
+					if tc.umask != -1 {
+						umask := uint32(tc.umask)
+						c.HostConfig.Umask = &umask
+					}
+					c.Config.Healthcheck = &containertypes.HealthConfig{
+						Test:     []string{"CMD-SHELL", "umask"},
+						Interval: time.Millisecond,
+						Retries:  1,
+					}
+				})
+				poll.WaitOn(t, pollForHealthCheckLog(ctx, apiClient, cID, tc.expected+"\n"), poll.WithTimeout(3*time.Second))
+			})
 		}
 	}
 }
